@@ -271,7 +271,15 @@
 
   /* ---------- state, history, storage ---------- */
   function snapshot() { return JSON.stringify({ room: S.room, items: S.items }); }
+  // S.room and S.items stand for the current layout, but undo, delete, clear and
+  // load replace them with new objects; write them back before the layouts are
+  // saved or the current layout changes.
+  function syncCur() {
+    var L = S.layouts[S.li];
+    if (L) { L.room = S.room; L.items = S.items; }
+  }
   function persist() {
+    syncCur();
     try {
       localStorage.setItem(STORE, JSON.stringify({ v: 3, li: S.li, layouts: S.layouts, snap: S.snap, bare: S.bare, units: S.units, walk: S.walk, path: S.path, example: S.example, hist: hist.slice(-30) }));
     } catch (e) { /* storage unavailable */ }
@@ -349,6 +357,7 @@
     for (;;) { n = base + ' ' + i; if (!S.layouts.some(function (l) { return l.name === n; })) return n; i++; }
   }
   function addLayout(fromCurrent) {
+    syncCur();
     var name = uniqueName(fromCurrent ? S.layouts[S.li].name + ' copy' : 'Layout');
     // cleanItem re-stamps ids so copies don't collide with originals
     S.layouts.push({
@@ -365,6 +374,7 @@
   }
   function switchLayout(i) {
     if (i === S.li || !S.layouts[i]) return;
+    syncCur();
     S.li = i;
     bindCur();
     S.sel = null;
@@ -383,7 +393,9 @@
     }
     delArm = -1;
     if (delArmTimer) clearTimeout(delArmTimer);
+    syncCur();
     S.layouts.splice(i, 1);
+    if (i < S.li) S.li--;
     if (S.li >= S.layouts.length) S.li = S.layouts.length - 1;
     if (S.li < 0) S.li = 0;
     if (!S.layouts.length) S.layouts = [{ name: 'Layout 1', room: normRoom({ w: 360, d: 300 }), items: [] }];
@@ -742,7 +754,7 @@
       b.setAttribute('role', 'tab');
       b.textContent = l.name || 'Layout';
       b.setAttribute('data-switch', i);
-      b.title = 'Switch to "' + b.textContent + '" — double-click to rename';
+      b.title = i === S.li ? 'Click to rename' : 'Switch to "' + b.textContent + '"';
       b.setAttribute('aria-selected', i === S.li ? 'true' : 'false');
       t.appendChild(b);
       if (S.layouts.length > 1) {
@@ -886,7 +898,9 @@
     var p = toRoom(e);
     drag = (it && !it.lock) ? { id: id, ox: p.x - it.x, oy: p.y - it.y, moved: false } : null;
     if (drag) { try { svg.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ } }
-    renderAll(true);
+    // Redraw next frame: rebuilding the plan now would detach the touched element before
+    // its touchstart fires, and the touchstart handler below needs it to claim the gesture.
+    requestAnimationFrame(function () { renderAll(true); });
     e.preventDefault();
   });
   svg.addEventListener('pointermove', function (e) {
@@ -905,6 +919,17 @@
     var moved = drag.moved; drag = null;
     if (moved) { commit(); renderAll(true); }
   }
+  // touch-action is ignored on SVG children, so a finger drag on an item would turn into a
+  // page scroll and cancel the pointer stream. Claim the touch when it starts on a movable
+  // item or while drawing; anywhere else on the plan still scrolls the page.
+  svg.addEventListener('touchstart', function (e) {
+    if (drawTool) { e.preventDefault(); return; }
+    var node = e.target.closest ? e.target.closest('[data-id]') : null;
+    if (!node) return;
+    var id = parseInt(node.getAttribute('data-id'), 10);
+    var it = S.items.filter(function (i) { return i.id === id; })[0];
+    if (it && !it.lock) e.preventDefault();
+  }, { passive: false });
   svg.addEventListener('pointerup', endDrag);
   svg.addEventListener('pointercancel', endDrag);
   svg.addEventListener('dblclick', function (e) {
@@ -1128,17 +1153,20 @@
     var d = e.target.closest ? e.target.closest('[data-del]') : null;
     if (d) { delLayout(parseInt(d.getAttribute('data-del'), 10)); return; }
     var s = e.target.closest ? e.target.closest('[data-switch]') : null;
-    if (s) { switchLayout(parseInt(s.getAttribute('data-switch'), 10)); }
+    if (!s) return;
+    var i = parseInt(s.getAttribute('data-switch'), 10);
+    // Clicking the tab that's already open renames it, which also works on touch screens.
+    if (i === S.li) renameTab(s);
+    else switchLayout(i);
   });
-  $('tabs').addEventListener('dblclick', function (e) {
-    var b = e.target.closest ? e.target.closest('.tab.on .tbtn[data-switch]') : null;
-    if (!b) return;
+  function renameTab(b) {
     var inp = document.createElement('input');
     inp.type = 'text';
     inp.value = S.layouts[S.li].name;
     inp.maxLength = 30;
-    b.textContent = '';
-    b.appendChild(inp);
+    inp.setAttribute('aria-label', 'Layout name');
+    // Swap the button out rather than nesting the input in it: Firefox won't let you type inside a button.
+    b.parentNode.replaceChild(inp, b);
     inp.focus();
     inp.select();
     var closed = false;
@@ -1154,7 +1182,7 @@
       else if (e.key === 'Escape') done(false);
     });
     inp.addEventListener('blur', function () { done(true); });
-  });
+  }
 
   $('list').addEventListener('click', function (e) {
     var del = e.target.closest ? e.target.closest('[data-del]') : null;
@@ -1323,15 +1351,19 @@
   }
   function loadFromHash() {
     var m = /^#l=(.+)$/.exec(location.hash || '');
-    return m ? loadFromCode(m[1]) : false;
+    if (!m) return false;
+    var ok = loadFromCode(m[1]);
+    // Drop the code from the address once it's imported, so a reload doesn't add the layout again.
+    try { history.replaceState(null, '', location.href.split('#')[0]); } catch (e) { /* file:// in some browsers */ }
+    return ok;
   }
 
   /* ---------- PDF export ---------- */
   var PLAN_CLASSES = /^(room|grid|wall|dim|dimtext|gaptext|halo|item|frame|jamb|swing|leaf|winline|hit|wallline|winlabel|area)$/;
-  function planCss(m) {
-    var cs = getComputedStyle(document.documentElement);
-    var names = ['bg', 'fg', 'muted', 'line', 'accent', 'accent-fg', 'grid', 'grid-strong', 'room', 'wall',
-      'bad', 'warn', 'ok', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'font-ui', 'font-head', 'font-mono'];
+  var PLAN_VARS = ['bg', 'fg', 'muted', 'line', 'accent', 'accent-fg', 'grid', 'grid-strong', 'room', 'wall',
+    'bad', 'warn', 'ok', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'font-ui', 'font-head', 'font-mono'];
+  function planCss(m, cs) {
+    var names = PLAN_VARS;
     var out = 'svg{';
     for (var i = 0; i < names.length; i++) out += '--' + names[i] + ':' + cs.getPropertyValue('--' + names[i]).trim() + ';';
     out += '}';
@@ -1359,7 +1391,20 @@
     }
     return out;
   }
-  function buildPlanSvg() {
+  // Colours for an export: the plan's own, or for print the light palette, read from a
+  // hidden probe so the plan on screen never changes colour.
+  function exportStyle(print) {
+    if (!print) return getComputedStyle(svg);
+    var probe = document.createElement('span');
+    probe.className = 'print-palette';
+    probe.hidden = true;
+    svg.parentNode.appendChild(probe);
+    var cs = getComputedStyle(probe), copy = {};
+    PLAN_VARS.forEach(function (n) { copy['--' + n] = cs.getPropertyValue('--' + n); });
+    probe.parentNode.removeChild(probe);
+    return { getPropertyValue: function (n) { return copy[n] || ''; } };
+  }
+  function buildPlanSvg(print) {
     var vb = (svg.getAttribute('viewBox') || '').split(/\s+/).map(Number);
     if (vb.length !== 4 || !(vb[2] > 0) || !(vb[3] > 0)) return null;
     var cssW = parseFloat(svg.style.width) || svg.clientWidth;
@@ -1371,11 +1416,12 @@
     clone.setAttribute('width', cssW);
     clone.setAttribute('height', cssH);
     var st = document.createElementNS(SVGNS, 'style');
-    st.textContent = planCss(m);
+    var cs = exportStyle(print);
+    st.textContent = planCss(m, cs);
     clone.insertBefore(st, clone.firstChild);
     var junk = clone.querySelectorAll('.selbox, .gap, .bandrect');
     for (var i = 0; i < junk.length; i++) junk[i].parentNode.removeChild(junk[i]);
-    return { clone: clone, cssW: cssW, cssH: cssH };
+    return { clone: clone, cssW: cssW, cssH: cssH, bg: cs.getPropertyValue('--bg').trim() };
   }
   function serializePlan(b) {
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(b.clone);
@@ -1390,8 +1436,7 @@
         var cv = document.createElement('canvas');
         cv.width = cw; cv.height = ch;
         var ctx = cv.getContext('2d');
-        var bg = (getComputedStyle(document.documentElement).getPropertyValue('--bg') || '#fff').trim();
-        ctx.fillStyle = bg || '#fff';
+        ctx.fillStyle = b.bg || '#fff';
         ctx.fillRect(0, 0, cw, ch);
         ctx.drawImage(img, 0, 0, cw, ch);
         cb(cv, cw, ch);
@@ -1418,7 +1463,7 @@
       toast(err ? 'Could not export the PDF.' : 'PDF downloaded.');
     }
     try {
-      var b = buildPlanSvg();
+      var b = buildPlanSvg(true);
       if (!b) { done(true); return; }
       rasterizePlan(b, function (cv, cw, ch) {
         if (!cv) { done(true); return; }

@@ -11,9 +11,9 @@ A free, no-build web app for planning furniture layouts on a to-scale floor plan
 - **Real-time conflict checks** — overlapping furniture, items outside the room, blocked door swings, and walkways narrower than your chosen path width
 - **Preset furniture catalog** — beds, nightstands, dressers, sofas, tables, desks, appliances and more, or add fully custom items
 - **Doors & windows** — snap to walls, flip hinges, resize to match your openings
-- **Multiple saved layouts** — tabs for comparing arrangements (e.g. "Option A" vs "Option B"), with undo/redo
+- **Multiple saved layouts** — tabs for comparing arrangements (e.g. "Option A" vs "Option B"), with undo/redo; click the open tab to rename it
 - **Share links** — one URL encodes the whole layout; send it to anyone and they see the same plan
-- **Export** — download the plan as PDF, PNG or scalable SVG
+- **Export** — download the plan as PDF, PNG or scalable SVG; the PDF always uses the light palette so it prints well
 - **Outside areas** — sketch hallways, closets or bathrooms outside the room so the plan shows your whole space
 - **Measurements** — item dimensions, wall-gap measurements for the selected item, and floor/furniture area stats
 - **Autosave** — your layouts persist in the browser; copy/paste text export to move a layout between devices

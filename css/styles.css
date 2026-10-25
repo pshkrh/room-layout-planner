@@ -44,6 +44,13 @@
   color-scheme: dark;
 }
 
+/* PDF exports always use the light palette, so they print well whatever the theme. */
+.print-palette {
+  --bg: #FFFFFF; --fg: #172126; --muted: #55656C; --line: #D2DADC; --accent: #1B6E8C; --accent-fg: #FFFFFF;
+  --grid: #E3E9EA; --grid-strong: #CAD4D7; --room: #FBFCFC; --wall: #172126; --bad: #C23B3B; --warn: #B07A14; --ok: #2B8A57;
+  --c1: #3B7DD8; --c2: #1E9E8F; --c3: #5BA23C; --c4: #D49A1A; --c5: #E0732B; --c6: #D2486A; --c7: #8A5FD0; --c8: #6B7C85;
+}
+
 * { box-sizing: border-box; }
 body {
   background: var(--bg);
@@ -59,7 +66,7 @@ h1, h2 { margin: 0; font-family: var(--font-head); font-weight: 600; }
 .top { max-width: 1400px; margin: 0 auto 16px; display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: end; justify-content: space-between; }
 .top h1 { font-size: 26px; letter-spacing: 0.01em; line-height: 1.1; }
 .top p { margin: 4px 0 0; color: var(--muted); max-width: 60ch; }
-.top-actions { display: flex; gap: 8px; }
+.top-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
 .app { max-width: 1400px; margin: 0 auto; display: grid; grid-template-columns: minmax(300px, 360px) minmax(0, 1fr); gap: 24px; align-items: start; }
 .panel { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
