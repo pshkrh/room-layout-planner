@@ -10,6 +10,7 @@
 <meta property="og:title" content="Room Layout Planner">
 <meta property="og:description" content="Plan furniture layouts on a to-scale floor plan. Overlaps, door swings and tight walkways are flagged as you move things around.">
 <meta property="og:type" content="website">
+<meta property="og:image" content="https://raw.githubusercontent.com/pshkrh/room-layout-planner/main/docs/screenshot.png">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='3' fill='%231B6E8C'/%3E%3Crect x='7' y='16' width='8' height='9' rx='1' fill='%23fff' opacity='.9'/%3E%3Crect x='17' y='8' width='8' height='5' rx='1' fill='%23fff' opacity='.7'/%3E%3Crect x='17' y='16' width='8' height='6' rx='1' fill='%23fff' opacity='.5'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -23,7 +24,12 @@
     <p>Place furniture on a to-scale floor plan. Overlaps, door swings and tight walkways are flagged as you move things.</p>
   </div>
   <div class="top-actions">
-    <button id="exportPdf" class="btn" type="button">Export PDF</button>
+    <div class="btngroup" role="group" aria-label="Export the plan">
+      <button id="exportPdf" class="btn" type="button" title="Download the plan as a PDF">PDF</button>
+      <button id="exportPng" class="btn" type="button" title="Download the plan as a PNG image">PNG</button>
+      <button id="exportSvg" class="btn" type="button" title="Download the plan as a scalable SVG">SVG</button>
+    </div>
+    <button id="copyLinkTop" class="btn" type="button" title="Copy a link that shows this exact layout">Share link</button>
     <button id="undo" class="btn" type="button" disabled>Undo</button>
     <button id="redo" class="btn" type="button" disabled>Redo</button>
   </div>
@@ -37,7 +43,7 @@
         <label for="roomW">Width <span class="hint">left to right</span><input id="roomW" type="text" autocomplete="off" spellcheck="false"></label>
         <label for="roomD">Length <span class="hint">top to bottom</span><input id="roomD" type="text" autocomplete="off" spellcheck="false"></label>
       </div>
-      <p class="note" id="roomMsg">Type sizes like 14' 6", 14ft 6in, 174, 12.5 ft or 380 cm.</p>
+      <p class="note" id="roomMsg">Type sizes like 14' 6", 14ft 6in, 174, 12.5 ft or 380 cm — units are always recognised.</p>
       <fieldset class="walls">
         <legend>Window walls</legend>
         <label class="chk" for="winT"><input id="winT" type="checkbox"> Top</label>
@@ -46,19 +52,32 @@
         <label class="chk" for="winL"><input id="winL" type="checkbox"> Left</label>
       </fieldset>
       <div class="row2">
-        <label for="bareUnit">Plain numbers mean
-          <select id="bareUnit"><option value="in">inches</option><option value="ft">feet</option></select>
+        <label for="units">Show sizes in
+          <select id="units">
+            <option value="ftin">Feet &amp; inches</option>
+            <option value="in">Inches</option>
+            <option value="cm">Centimetres</option>
+            <option value="m">Metres</option>
+          </select>
         </label>
-        <label for="snap">Snap
-          <select id="snap"><option value="0">Off</option><option value="1">1 inch</option><option value="3">3 inches</option><option value="6">6 inches</option></select>
+        <label for="bareUnit">Plain numbers mean
+          <select id="bareUnit">
+            <option value="in">inches</option>
+            <option value="ft">feet</option>
+            <option value="cm">centimetres</option>
+            <option value="m">metres</option>
+          </select>
         </label>
       </div>
       <div class="row2">
-        <label class="chk" for="walk" style="align-self:end;height:34px"><input id="walk" type="checkbox"> Walkway check</label>
+        <label for="snap">Snap
+          <select id="snap"></select>
+        </label>
         <label for="pathW">Path width
           <input id="pathW" type="text" autocomplete="off" spellcheck="false">
         </label>
       </div>
+      <label class="chk full" for="walk"><input id="walk" type="checkbox"> Walkway check</label>
     </section>
 
     <section class="block">
@@ -122,13 +141,28 @@
 
     <details class="block io">
       <summary>Save, share or restore</summary>
-      <p class="note">Your layout saves in this browser automatically. To back it up or move it to another device, copy the text below, then paste it back later and choose Load.</p>
+      <p class="note">Your layout saves in this browser automatically. To back it up or move it to another device, copy the text below, then paste it back later and choose Load. A share link encodes the whole layout in the address, so anyone you send it to sees the same plan.</p>
       <textarea id="io" rows="4" spellcheck="false" aria-label="Layout data"></textarea>
       <div class="btnrow" style="margin-top:10px">
         <button id="copyLayout" class="btn" type="button">Copy layout</button>
+        <button id="copyLink" class="btn" type="button">Copy share link</button>
         <button id="loadLayout" class="btn" type="button">Load from box</button>
         <button id="resetExample" class="btn" type="button">Load example</button>
       </div>
+    </details>
+    <details class="block io">
+      <summary>Keyboard shortcuts</summary>
+      <dl class="keys">
+        <dt>Drag</dt><dd>Move the selected item</dd>
+        <dt>Arrows</dt><dd>Nudge 1″ (or 1 unit), Shift for 6″</dd>
+        <dt>R</dt><dd>Rotate the selected item 90°</dd>
+        <dt>Delete</dt><dd>Remove the selected item</dd>
+        <dt>Ctrl/⌘ + Z</dt><dd>Undo</dd>
+        <dt>Ctrl/⌘ + Shift + Z</dt><dd>Redo</dd>
+        <dt>Ctrl/⌘ + D</dt><dd>Duplicate the selected item</dd>
+        <dt>Esc</dt><dd>Deselect, or cancel drawing</dd>
+        <dt>Double-click</dt><dd>Rotate an item on the plan</dd>
+      </dl>
     </details>
   </aside>
 
@@ -137,9 +171,9 @@
       <div class="stats" id="stats"></div>
       <div class="issues" id="issues" aria-live="polite"></div>
     </div>
-    <p class="banner" id="banner" hidden>Example layout in a 14′ × 17′ studio. Enter your room size and add your own furniture to replace it.</p>
+    <p class="banner" id="banner" hidden><span id="bannerExample"></span> Enter your room size and add your own furniture to replace it.</p>
     <div class="tabs" id="tabs" role="tablist" aria-label="Saved layouts"></div>
-    <div class="canvaswrap" id="canvasWrap">
+    <div class="canvaswrap" id="canvasWrap" role="tabpanel" aria-label="Floor plan">
       <svg id="plan" role="img" aria-label="Floor plan"></svg>
     </div>
     <div class="selbar">
@@ -157,7 +191,7 @@
       <span><i style="border-color:var(--warn);background:color-mix(in srgb,var(--warn) 22%,transparent);border-style:dashed"></i>Darker amber floor: walkway under the path width</span>
       <span><i style="border-color:var(--muted);border-style:dashed;background:transparent"></i>Dashed rectangle: sketched area (visual only)</span>
     </div>
-    <p class="hintline">Drag to move. Arrow keys nudge 1″ (Shift for 6″). R rotates 90°, Delete removes. The bold tick on an item marks its front. Grid lines are 1 ft apart. Doors and windows snap to the nearest wall. Draw area sketches a rectangle anywhere on the plan, including outside the room.</p>
+    <p class="hintline">Drag to move. <span id="nudgeNote">Arrow keys nudge 1″ (Shift for 6″).</span> R rotates 90°, Delete removes. The bold tick on an item marks its front. <span id="gridNote">Grid lines are 1 ft apart.</span> Doors and windows snap to the nearest wall. Draw area sketches a rectangle anywhere on the plan, including outside the room.</p>
     <p id="msg" aria-live="polite"></p>
   </section>
 </main>

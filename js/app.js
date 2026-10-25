@@ -10,18 +10,60 @@
     ['Seating', [['Sofa', 84, 36, 2], ['Loveseat', 60, 36, 2], ['Armchair', 34, 36, 2], ['Desk chair', 22, 22, 2], ['Ottoman', 24, 24, 2]]],
     ['Tables and desks', [['Desk', 60, 30, 3], ['Standing desk', 48, 24, 3], ['Dining table', 48, 30, 3], ['Coffee table', 48, 24, 3], ['Side table', 18, 18, 3], ['Console table', 48, 14, 3]]],
     ['Storage and media', [['TV stand', 55, 16, 4], ['Bookshelf', 31, 12, 4], ['Cube shelf', 58, 15, 4], ['Shoe rack', 30, 12, 4]]],
-    ['Rugs (no collisions)', [['Rug 5 x 8 ft', 60, 96, 8, 'flat'], ['Rug 8 x 10 ft', 96, 120, 8, 'flat']]],
+    ['Rugs (no collisions)', [['Rug 5 x 8 ft', 60, 96, 8, 'flat', 'Rug 150 × 240 cm'], ['Rug 8 x 10 ft', 96, 120, 8, 'flat', 'Rug 240 × 305 cm']]],
     ['Room features', [['Door', 32, 4, 5, 'door'], ['Window', 48, 4, 6, 'window'], ['Fixed obstacle', 24, 24, 8, 'lock']]]
   ];
   var PFLAT = [];
   PRESETS.forEach(function (g) { g[1].forEach(function (p) { PFLAT.push(p); }); });
+  // Preset label and item name follow the current display unit.
+  function presetName(p) { return isMetric() && p[5] ? p[5] : p[0]; }
+  function presetLabel(p) {
+    var name = presetName(p);
+    if (p[4] === 'door' || p[4] === 'window') return name + ' (' + fmtLen(p[1], true) + ' wide)';
+    return name + ' (' + fmtDims(p[1], p[2]) + ')';
+  }
 
-  var S = { room: { w: 168, d: 204 }, items: [], sel: null, snap: 3, bare: 'in', walk: false, path: 30, example: true, layouts: [], li: 0 };
+  var S = { room: { w: 168, d: 204 }, items: [], sel: null, snap: 3, bare: 'in', units: 'ftin', walk: false, path: 30, example: true, layouts: [], li: 0 };
   var uid = 1, hist = [], fut = [], lastSnap = '', delArm = -1, delArmTimer = 0;
   var A = { status: {}, partner: {}, issues: 0 };
   var SC = 1, PX = 1;
   var svg = $('plan');
   var SVGNS = 'http://www.w3.org/2000/svg';
+
+  /* ---------- units ----------
+     Everything is stored in inches. The display unit only affects how numbers
+     are shown and how a bare number (no suffix) is read. */
+  var IN_CM = 2.54;      // centimetres per inch
+  var CM_IN = 1 / IN_CM; // inches per centimetre
+  var UNITS = {
+    ftin: { label: 'Feet & inches', bare: 'in' },
+    in: { label: 'Inches', bare: 'in' },
+    cm: { label: 'Centimetres', bare: 'cm' },
+    m: { label: 'Metres', bare: 'm' }
+  };
+  var BARE_LABELS = { in: 'inches', ft: 'feet', cm: 'centimetres', m: 'metres' };
+  function isMetric() { return S.units === 'cm' || S.units === 'm'; }
+  // Snap increments in inches, per measurement system.
+  var SNAP_SETS = {
+    in: [[0, 'Off'], [1, '1 inch'], [3, '3 inches'], [6, '6 inches']],
+    cm: [[0, 'Off'], [1 * CM_IN, '1 cm'], [5 * CM_IN, '5 cm'], [10 * CM_IN, '10 cm']],
+    m: [[0, 'Off'], [10 * CM_IN, '10 cm'], [50 * CM_IN, '50 cm'], [100 * CM_IN, '1 m']]
+  };
+  function snapSet() { return SNAP_SETS[isMetric() ? (S.units === 'm' ? 'm' : 'cm') : 'in']; }
+  function nearestSnap(v) {
+    var set = snapSet(), best = set[0][0], d = Infinity;
+    set.forEach(function (o) {
+      var dd = Math.abs(o[0] - (isFinite(v) ? v : 0));
+      if (dd < d) { d = dd; best = o[0]; }
+    });
+    return best;
+  }
+  // Grid lines: 1 ft / 12 in in imperial, 50 cm in metric.
+  function gridSteps() {
+    return isMetric()
+      ? { minor: 50 * CM_IN, per: 2 }
+      : { minor: 12, per: 5 };
+  }
 
   /* ---------- length parsing and formatting ---------- */
   function parseLen(str, bare) {
@@ -47,20 +89,59 @@
     m = s.match(/^(\d+)\s*-\s*(\d+(?:\.\d+)?)$/);
     if (m) return parseFloat(m[1]) * 12 + parseFloat(m[2]);
     m = s.match(new RegExp('^' + n + '$'));
-    if (m) return bare === 'ft' ? parseFloat(m[1]) * 12 : parseFloat(m[1]);
+    if (m) {
+      var v = parseFloat(m[1]);
+      if (bare === 'ft') return v * 12;
+      if (bare === 'cm') return v / IN_CM;
+      if (bare === 'm') return v * 100 / IN_CM;
+      return v;
+    }
     return NaN;
   }
   function r1(n) { return Math.round(n * 10) / 10; }
   function trim(n) { return String(r1(n)); }
-  function fmtFI(n) {
-    n = r1(n);
-    if (n < 12) return trim(n) + '\u2033';
-    var ft = Math.floor(n / 12 + 1e-9);
-    var inch = r1(n - ft * 12);
-    if (inch >= 12) { ft += 1; inch = 0; }
-    return ft + '\u2032 ' + trim(inch) + '\u2033';
+  // Lengths are shown in the current display unit. `short` drops a zero inch
+  // part so plan labels stay compact ("5′" instead of "5′ 0″").
+  // Keyboard nudge distance, in inches, per measurement system.
+  function nudgeSteps() {
+    return isMetric() ? { step: 1 * CM_IN, big: 5 * CM_IN } : { step: 1, big: 6 };
   }
-  function fmtIn(n) { return trim(n) + '\u2033'; }
+  // A single number in the current unit, without the unit suffix.
+  function fmtNum(n) {
+    if (S.units === 'cm') {
+      var cm = n * IN_CM;
+      return String(Math.abs(cm) < 10 ? Math.round(cm * 10) / 10 : Math.round(cm));
+    }
+    if (S.units === 'm') return (n * 0.0254).toFixed(2);
+    return trim(r1(n));
+  }
+  function fmtLen(n, short) {
+    if (S.units === 'cm') return fmtNum(n) + ' cm';
+    if (S.units === 'm') return fmtNum(n) + ' m';
+    n = r1(n);
+    if (S.units === 'in') return trim(n) + '″';
+    var neg = n < 0 ? '-' : '';
+    var a = Math.abs(n);
+    // Short labels stay in inches for small pieces so plan text stays compact.
+    if (a < 12 || (short && a < 24)) return neg + trim(a) + '″';
+    var ft = Math.floor(a / 12 + 1e-9);
+    var inch = r1(a - ft * 12);
+    if (inch >= 12) { ft += 1; inch = 0; }
+    if (short && inch === 0) return neg + ft + '′';
+    return neg + ft + '′ ' + trim(inch) + '″';
+  }
+  // A width × depth pair, with the unit written once.
+  function fmtDims(w, d) {
+    if (S.units === 'cm' || S.units === 'm') return fmtNum(w) + ' × ' + fmtNum(d) + (S.units === 'cm' ? ' cm' : ' m');
+    return fmtLen(w, true) + ' × ' + fmtLen(d, true);
+  }
+  function fmtArea(sqIn) {
+    if (isMetric()) {
+      var m2 = sqIn * 0.00064516;
+      return (m2 < 10 ? m2.toFixed(2) : m2.toFixed(1)) + ' m²';
+    }
+    return Math.round(sqIn / 144) + ' sq ft';
+  }
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
   function normRoom(r) {
     var w = (r && r.windows) || {};
@@ -192,7 +273,7 @@
   function snapshot() { return JSON.stringify({ room: S.room, items: S.items }); }
   function persist() {
     try {
-      localStorage.setItem(STORE, JSON.stringify({ v: 2, li: S.li, layouts: S.layouts, snap: S.snap, bare: S.bare, walk: S.walk, path: S.path, example: S.example, hist: hist.slice(-30) }));
+      localStorage.setItem(STORE, JSON.stringify({ v: 3, li: S.li, layouts: S.layouts, snap: S.snap, bare: S.bare, units: S.units, walk: S.walk, path: S.path, example: S.example, hist: hist.slice(-30) }));
     } catch (e) { /* storage unavailable */ }
   }
   var persistTimer = 0;
@@ -329,7 +410,7 @@
       var raw = localStorage.getItem(STORE);
       if (!raw) return false;
       var o = JSON.parse(raw);
-      if (o && o.v === 2 && Array.isArray(o.layouts)) {
+      if ((o.v === 2 || o.v === 3) && Array.isArray(o.layouts)) {
         var ok = o.layouts.filter(function (l) {
           return l && l.room && (l.room.w > 0) && (l.room.d > 0) && Array.isArray(l.items);
         }).map(function (l) {
@@ -345,8 +426,9 @@
       }
       bindCur();
       S.sel = null;
-      S.snap = SNAPS_OK(o.snap) ? o.snap : 3;
-      S.bare = o.bare === 'ft' ? 'ft' : 'in';
+      S.units = UNITS[o.units] ? o.units : 'ftin';
+      S.bare = BARE_LABELS[o.bare] ? o.bare : UNITS[S.units].bare;
+      S.snap = nearestSnap(o.snap);
       S.walk = !!o.walk;
       S.path = o.path >= 12 && o.path <= 72 ? o.path : 30;
       S.example = !!o.example;
@@ -355,7 +437,6 @@
       return true;
     } catch (e) { return false; }
   }
-  function SNAPS_OK(v) { return v === 0 || v === 1 || v === 3 || v === 6; }
 
   /* ---------- svg helpers ---------- */
   function se(tag, attrs, parent) {
@@ -402,9 +483,14 @@
     se('rect', { x: 0, y: 0, width: W, height: D }, cp);
     se('rect', { x: 0, y: 0, width: W, height: D, class: 'room' }, svg);
 
-    var grid = se('g', { class: 'grid' }, svg), i;
-    for (i = 12; i < W; i += 12) se('line', { x1: i, y1: 0, x2: i, y2: D, class: i % 60 === 0 ? 'strong' : '' }, grid);
-    for (i = 12; i < D; i += 12) se('line', { x1: 0, y1: i, x2: W, y2: i, class: i % 60 === 0 ? 'strong' : '' }, grid);
+    var grid = se('g', { class: 'grid' }, svg), i, n;
+    var gs = gridSteps();
+    for (i = gs.minor, n = 1; i < W; i += gs.minor, n++) {
+      se('line', { x1: i, y1: 0, x2: i, y2: D, class: n % gs.per === 0 ? 'strong' : '' }, grid);
+    }
+    for (i = gs.minor, n = 1; i < D; i += gs.minor, n++) {
+      se('line', { x1: 0, y1: i, x2: W, y2: i, class: n % gs.per === 0 ? 'strong' : '' }, grid);
+    }
     se('rect', { x: 0, y: 0, width: W, height: D, class: 'wall' }, svg);
     var rw = S.room.windows || {};
     var wg = se('g', {}, svg);
@@ -418,11 +504,11 @@
     se('line', { x1: 0, y1: ty, x2: W, y2: ty }, dg);
     se('line', { x1: 0, y1: ty - tk, x2: 0, y2: ty + tk }, dg);
     se('line', { x1: W, y1: ty - tk, x2: W, y2: ty + tk }, dg);
-    stext(dg, W / 2, ty, fmtFI(W), 'dimtext', 12 * PX, { dy: '0.35em', 'stroke-width': 4 * PX });
+    stext(dg, W / 2, ty, fmtLen(W), 'dimtext', 12 * PX, { dy: '0.35em', 'stroke-width': 4 * PX });
     se('line', { x1: tx, y1: 0, x2: tx, y2: D }, dg);
     se('line', { x1: tx - tk, y1: 0, x2: tx + tk, y2: 0 }, dg);
     se('line', { x1: tx - tk, y1: D, x2: tx + tk, y2: D }, dg);
-    stext(dg, 0, 0, fmtFI(D), 'dimtext', 12 * PX, { dy: '0.35em', 'stroke-width': 4 * PX, transform: 'translate(' + tx + ' ' + (D / 2) + ') rotate(-90)' });
+    stext(dg, 0, 0, fmtLen(D), 'dimtext', 12 * PX, { dy: '0.35em', 'stroke-width': 4 * PX, transform: 'translate(' + tx + ' ' + (D / 2) + ') rotate(-90)' });
 
     var flats = S.items.filter(function (i) { return i.kind === 'item' && i.flat; });
     var solids = S.items.filter(isSolid);
@@ -456,7 +542,7 @@
       gaps.forEach(function (q) {
         if (q.g < 0.4) return;
         se('line', { x1: q.x1, y1: q.y1, x2: q.x2, y2: q.y2 }, gg);
-        if (q.g * SC >= 30) stext(gg, q.tx, q.ty, fmtFI(q.g), 'gaptext', 11 * PX, { dy: '0.35em', 'stroke-width': 3.5 * PX });
+        if (q.g * SC >= 30) stext(gg, q.tx, q.ty, fmtLen(q.g, true), 'gaptext', 11 * PX, { dy: '0.35em', 'stroke-width': 3.5 * PX });
       });
     }
   }
@@ -508,7 +594,7 @@
         var fs = 12 * PX;
         var tg = se('g', { transform: 'rotate(' + (-it.rot) + ')' }, g);
         stext(tg, 0, showDims ? -0.1 * fs : 0.35 * fs, nm, '', fs);
-        if (showDims) stext(tg, 0, 1.25 * fs, fmtIn(w) + ' \u00D7 ' + fmtIn(d), 'dims', 10 * PX);
+        if (showDims) stext(tg, 0, 1.25 * fs, fmtDims(w, d), 'dims', 10 * PX);
       }
     } else if (it.kind === 'window') {
       se('rect', { x: -w / 2, y: -28, width: w, height: 56, class: 'hit' }, g);
@@ -561,7 +647,7 @@
       var mid = h('span', '');
       mid.style.minWidth = '0';
       mid.appendChild(h('span', 'nm', it.name));
-      mid.appendChild(h('span', 'sz', fmtIn(it.w) + ' \u00D7 ' + fmtIn(it.d) + (it.kind === 'item' ? '' : ' ' + it.kind)));
+      mid.appendChild(h('span', 'sz', fmtDims(it.w, it.d) + (it.kind === 'item' ? '' : ' ' + it.kind)));
       mid.firstChild.style.display = 'block';
       b.appendChild(mid);
       var c = chipFor(it) || (it.lock ? { t: 'Locked', c: 'lock' } : null) || (it.ov ? { t: 'Overlap allowed', c: 'lock' } : null);
@@ -579,10 +665,11 @@
     el.value = v; el.classList.remove('invalid');
   }
   function syncRoomFields(force) {
-    setVal('roomW', fmtFI(S.room.w), force);
-    setVal('roomD', fmtFI(S.room.d), force);
-    setVal('pathW', fmtIn(S.path), force);
+    setVal('roomW', fmtLen(S.room.w), force);
+    setVal('roomD', fmtLen(S.room.d), force);
+    setVal('pathW', fmtLen(S.path, true), force);
     $('bareUnit').value = S.bare;
+    $('units').value = S.units;
     $('snap').value = String(S.snap);
     $('walk').checked = S.walk;
     var rwin = S.room.windows || {};
@@ -594,10 +681,10 @@
     $('edEmpty').hidden = !!it; $('edForm').hidden = !it;
     if (!it) return;
     setVal('edName', it.name, force);
-    setVal('edW', fmtIn(it.w), force);
-    setVal('edD', fmtIn(it.d), force);
-    setVal('edX', fmtFI(it.x), force);
-    setVal('edY', fmtFI(it.y), force);
+    setVal('edW', fmtLen(it.w, true), force);
+    setVal('edD', fmtLen(it.d, true), force);
+    setVal('edX', fmtLen(it.x, true), force);
+    setVal('edY', fmtLen(it.y, true), force);
     setVal('edRot', String(Math.round(it.rot)), force);
     $('edFlat').checked = it.flat; $('edLock').checked = it.lock;
     $('edFlatWrap').hidden = it.kind !== 'item';
@@ -617,24 +704,33 @@
     if (!it) { info.textContent = 'Nothing selected'; return; }
     info.appendChild(h('b', '', it.name));
     var rot = it.kind === 'item' ? '  at ' + Math.round(it.rot) + '\u00B0' : '';
-    info.appendChild(h('span', 'mono', '  ' + fmtIn(it.w) + ' \u00D7 ' + fmtIn(it.d) + rot + (it.lock ? '  locked' : '')));
+    info.appendChild(h('span', 'mono', '  ' + fmtDims(it.w, it.d) + rot + (it.lock ? '  locked' : '')));
   }
   function renderStats() {
-    var floor = S.room.w * S.room.d / 144;
+    var floor = S.room.w * S.room.d;
     var used = 0;
-    S.items.forEach(function (i) { if (isSolid(i)) used += i.w * i.d / 144; });
+    S.items.forEach(function (i) { if (isSolid(i)) used += i.w * i.d; });
     var pct = floor > 0 ? Math.round(used / floor * 100) : 0;
     var st = $('stats');
     while (st.firstChild) st.removeChild(st.firstChild);
     st.appendChild(document.createTextNode('Floor '));
-    st.appendChild(h('b', '', Math.round(floor) + ' sq ft'));
-    st.appendChild(document.createTextNode('  \u00B7  Furniture '));
-    st.appendChild(h('b', '', Math.round(used) + ' sq ft (' + pct + '%)'));
+    st.appendChild(h('b', '', fmtArea(floor)));
+    st.appendChild(document.createTextNode('  ·  Furniture '));
+    st.appendChild(h('b', '', fmtArea(used) + ' (' + pct + '%)'));
     var is = $('issues');
     if (!S.items.some(isSolid)) { is.textContent = ''; is.className = 'issues'; }
     else if (A.issues === 0) { is.textContent = 'No conflicts'; is.className = 'issues ok'; }
     else { is.textContent = A.issues + (A.issues === 1 ? ' item needs attention' : ' items need attention'); is.className = 'issues bad'; }
     $('banner').hidden = !S.example;
+    var be = $('bannerExample');
+    if (be) be.textContent = 'Example layout in a ' + fmtLen(S.room.w, true) + ' × ' + fmtLen(S.room.d, true) + ' studio.';
+    var gl = $('gridNote');
+    if (gl) gl.textContent = isMetric() ? 'Grid lines are 50 cm apart.' : 'Grid lines are 1 ft apart.';
+    var nn = $('nudgeNote');
+    if (nn) {
+      var ns = nudgeSteps();
+      nn.textContent = 'Arrow keys nudge ' + fmtLen(ns.step, true) + ' (Shift for ' + fmtLen(ns.big, true) + ').';
+    }
   }
   function syncTabs() {
     var bar = $('tabs');
@@ -643,13 +739,14 @@
       var t = h('div', 'tab' + (i === S.li ? ' on' : ''));
       var b = h('button', 'tbtn');
       b.type = 'button';
+      b.setAttribute('role', 'tab');
       b.textContent = l.name || 'Layout';
       b.setAttribute('data-switch', i);
       b.title = 'Switch to "' + b.textContent + '" — double-click to rename';
-      if (i === S.li) b.setAttribute('aria-selected', 'true');
+      b.setAttribute('aria-selected', i === S.li ? 'true' : 'false');
       t.appendChild(b);
       if (S.layouts.length > 1) {
-        var x = h('button', 'x' + (delArm === i ? ' armed' : ''), '\u00D7');
+        var x = h('button', 'x' + (delArm === i ? ' armed' : ''), '×');
         x.type = 'button';
         x.setAttribute('data-del', i);
         x.setAttribute('aria-label', 'Delete layout "' + b.textContent + '"');
@@ -885,21 +982,59 @@
     clearTimeout(toast.t);
     toast.t = setTimeout(function () { m.textContent = ''; }, 3500);
   }
+  function showCrash(err) {
+    if (window.console && console.error) console.error(err);
+    var b = $('banner');
+    if (b) {
+      b.hidden = false;
+      b.className = 'banner err';
+      b.textContent = 'The planner hit an error: ' + ((err && err.message) || 'unknown') + '. Your saved layout is still in this browser — reload to try again.';
+    }
+  }
+  window.addEventListener('error', function (e) { showCrash(e.error || e.message); });
+  window.addEventListener('unhandledrejection', function (e) { showCrash(e.reason); });
 
   /* ---------- wiring ---------- */
-  (function buildControls() {
-    var sel = $('preset'), idx = 0;
+  function buildPresetOptions() {
+    var sel = $('preset'), idx = 0, keep = sel.value;
+    while (sel.firstChild) sel.removeChild(sel.firstChild);
     PRESETS.forEach(function (g) {
       var og = document.createElement('optgroup'); og.label = g[0];
       g[1].forEach(function (p) {
         var o = document.createElement('option');
         o.value = String(idx++);
-        o.textContent = p[4] === 'door' ? p[0] + ' (' + p[1] + '\u2033 wide)' : p[4] === 'window' ? p[0] + ' (' + p[1] + '\u2033 wide)' : p[0] + ' (' + p[1] + ' \u00D7 ' + p[2] + '\u2033)';
+        o.textContent = presetLabel(p);
         og.appendChild(o);
       });
       sel.appendChild(og);
     });
-    sel.value = '3';
+    if (keep) sel.value = keep;
+  }
+  function buildSnapOptions() {
+    var sel = $('snap'), keep = S.snap;
+    while (sel.firstChild) sel.removeChild(sel.firstChild);
+    snapSet().forEach(function (o) {
+      var op = document.createElement('option');
+      op.value = String(o[0]);
+      op.textContent = o[1];
+      sel.appendChild(op);
+    });
+    S.snap = nearestSnap(keep);
+    sel.value = String(S.snap);
+  }
+  function setUnits(u) {
+    if (!UNITS[u] || u === S.units) return;
+    S.units = u;
+    S.bare = UNITS[u].bare;
+    buildSnapOptions();
+    buildPresetOptions();
+    persist();
+    renderAll(true);
+  }
+
+  (function buildControls() {
+    buildPresetOptions();
+    buildSnapOptions();
     var sw = $('swatches');
     for (var i = 1; i <= 8; i++) {
       (function (n) {
@@ -915,7 +1050,7 @@
   $('addPreset').addEventListener('click', function () {
     var p = PFLAT[parseInt($('preset').value, 10)];
     if (!p) return;
-    addItem({ name: p[0], w: p[1], d: p[2], color: p[3], kind: p[4] === 'door' ? 'door' : p[4] === 'window' ? 'window' : 'item', flat: p[4] === 'flat', lock: p[4] === 'lock' });
+    addItem({ name: presetName(p), w: p[1], d: p[2], color: p[3], kind: p[4] === 'door' ? 'door' : p[4] === 'window' ? 'window' : 'item', flat: p[4] === 'flat', lock: p[4] === 'lock' });
   });
   $('addCustom').addEventListener('click', function () {
     var w = parseLen($('cW').value, S.bare), d = parseLen($('cD').value, S.bare);
@@ -956,7 +1091,8 @@
     $(pr[0]).addEventListener('change', function () { S.room.windows[pr[1]] = $(pr[0]).checked; commit(); renderAll(true); });
   });
   $('bareUnit').addEventListener('change', function () { S.bare = $('bareUnit').value; persist(); });
-  $('snap').addEventListener('change', function () { S.snap = parseInt($('snap').value, 10); persist(); });
+  $('units').addEventListener('change', function () { setUnits($('units').value); });
+  $('snap').addEventListener('change', function () { S.snap = parseFloat($('snap').value) || 0; persist(); });
 
   function lenField(id, key, min, max) {
     $(id).addEventListener('change', function () {
@@ -1052,9 +1188,27 @@
       } else fallback();
     } catch (e) { fallback(); }
   });
-  $('loadLayout').addEventListener('click', function () {
+  function copyShareLink() {
+    var url = shareUrl();
+    var box = $('io'); box.value = url;
+    function fallback() { box.focus(); box.select(); toast('Select the link and copy it'); }
     try {
-      var o = JSON.parse($('io').value);
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(function () { toast('Share link copied'); }, fallback);
+      } else fallback();
+    } catch (e) { fallback(); }
+  }
+  $('copyLink').addEventListener('click', copyShareLink);
+  $('copyLinkTop').addEventListener('click', copyShareLink);
+  $('loadLayout').addEventListener('click', function () {
+    var raw = ($('io').value || '').trim();
+    var link = /(?:^|[#&])l=([A-Za-z0-9\-_]+)/.exec(raw);
+    if (link && loadFromCode(link[1])) {
+      commit(); persist(); renderAll(true); toast('Layout loaded from link');
+      return;
+    }
+    try {
+      var o = JSON.parse(raw);
       if (!o || !o.room || !(o.room.w >= 36) || !(o.room.d >= 36) || !Array.isArray(o.items)) throw new Error('bad');
       uid = 1;
       S.room = normRoom({ w: clamp(o.room.w, 36, 1200), d: clamp(o.room.d, 36, 1200), windows: o.room.windows });
@@ -1074,7 +1228,8 @@
     if (mod || e.altKey) return;
     if (k === 'Escape' && (drawTool || band)) { disarmDraw(); renderAll(true); return; }
     if (!cur()) return;
-    var step = e.shiftKey ? 6 : 1;
+    var steps = nudgeSteps();
+    var step = e.shiftKey ? steps.big : steps.step;
     if (k === 'ArrowLeft') { e.preventDefault(); nudge(-step, 0); }
     else if (k === 'ArrowRight') { e.preventDefault(); nudge(step, 0); }
     else if (k === 'ArrowUp') { e.preventDefault(); nudge(0, -step); }
@@ -1090,7 +1245,86 @@
   window.addEventListener('pagehide', saveOnExit);
   window.addEventListener('beforeunload', saveOnExit);
   document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') saveOnExit(); });
+  window.addEventListener('hashchange', function () {
+    if (loadFromHash()) { persist(); renderAll(true); toast('Opened a shared layout'); }
+  });
   if (window.ResizeObserver) new ResizeObserver(onResize).observe($('canvasWrap'));
+
+  /* ---------- share links ----------
+     The layout is packed into a compact JSON object, then base64url encoded
+     into the URL hash so a link can carry a whole room plan. */
+  function b64encode(str) {
+    var bytes = new TextEncoder().encode(str);
+    var bin = '';
+    for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  function b64decode(str) {
+    var s = str.replace(/-/g, '+').replace(/_/g, '/');
+    while (s.length % 4) s += '=';
+    var bin = atob(s);
+    var bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder().decode(bytes);
+  }
+  var KIND_CODE = { item: 0, door: 1, window: 2, area: 3 };
+  var CODE_KIND = ['item', 'door', 'window', 'area'];
+  function packLayout() {
+    var w = S.room.windows || {};
+    return {
+      v: 1,
+      r: [r1(S.room.w), r1(S.room.d)],
+      w: [w.top ? 1 : 0, w.right ? 1 : 0, w.bottom ? 1 : 0, w.left ? 1 : 0],
+      i: S.items.map(function (it) {
+        var flags = KIND_CODE[it.kind] || 0;
+        if (it.flat) flags |= 4;
+        if (it.ov) flags |= 8;
+        if (it.lock) flags |= 16;
+        if (it.flip) flags |= 32;
+        return [it.name, r1(it.w), r1(it.d), r1(it.x), r1(it.y), it.rot, it.color, flags];
+      })
+    };
+  }
+  function unpackLayout(o) {
+    if (!o || o.v !== 1 || !Array.isArray(o.r) || !Array.isArray(o.i)) throw new Error('bad');
+    var room = normRoom({ w: clamp(+o.r[0] || 0, 36, 1200), d: clamp(+o.r[1] || 0, 36, 1200) });
+    if (Array.isArray(o.w)) {
+      room.windows.top = !!o.w[0]; room.windows.right = !!o.w[1];
+      room.windows.bottom = !!o.w[2]; room.windows.left = !!o.w[3];
+    }
+    var items = o.i.map(function (a) {
+      if (!Array.isArray(a)) throw new Error('bad');
+      var flags = a[7] | 0;
+      return cleanItem({
+        name: a[0], w: a[1], d: a[2], x: a[3], y: a[4], rot: a[5], color: a[6],
+        kind: CODE_KIND[flags & 3], flat: !!(flags & 4), ov: !!(flags & 8),
+        lock: !!(flags & 16), flip: !!(flags & 32)
+      });
+    });
+    return { room: room, items: items };
+  }
+  function shareCode() { return b64encode(JSON.stringify(packLayout())); }
+  function shareUrl() {
+    var base = location.href.split('#')[0];
+    return base + '#l=' + shareCode();
+  }
+  function loadFromCode(code) {
+    try {
+      var data = unpackLayout(JSON.parse(b64decode(code)));
+      uid = 1;
+      S.layouts.push({ name: 'Shared layout', room: data.room, items: data.items });
+      S.li = S.layouts.length - 1;
+      bindCur();
+      S.sel = null;
+      S.example = false;
+      hist = []; fut = []; lastSnap = snapshot();
+      return true;
+    } catch (e) { return false; }
+  }
+  function loadFromHash() {
+    var m = /^#l=(.+)$/.exec(location.hash || '');
+    return m ? loadFromCode(m[1]) : false;
+  }
 
   /* ---------- PDF export ---------- */
   var PLAN_CLASSES = /^(room|grid|wall|dim|dimtext|gaptext|halo|item|frame|jamb|swing|leaf|winline|hit|wallline|winlabel|area)$/;
@@ -1125,6 +1359,57 @@
     }
     return out;
   }
+  function buildPlanSvg() {
+    var vb = (svg.getAttribute('viewBox') || '').split(/\s+/).map(Number);
+    if (vb.length !== 4 || !(vb[2] > 0) || !(vb[3] > 0)) return null;
+    var cssW = parseFloat(svg.style.width) || svg.clientWidth;
+    var cssH = parseFloat(svg.style.height) || svg.clientHeight;
+    if (!(cssW > 0) || !(cssH > 0)) return null;
+    var m = vb[2] / cssW; // room units per screen px, so stroke widths export at screen weight
+    var clone = svg.cloneNode(true);
+    clone.setAttribute('xmlns', SVGNS);
+    clone.setAttribute('width', cssW);
+    clone.setAttribute('height', cssH);
+    var st = document.createElementNS(SVGNS, 'style');
+    st.textContent = planCss(m);
+    clone.insertBefore(st, clone.firstChild);
+    var junk = clone.querySelectorAll('.selbox, .gap, .bandrect');
+    for (var i = 0; i < junk.length; i++) junk[i].parentNode.removeChild(junk[i]);
+    return { clone: clone, cssW: cssW, cssH: cssH };
+  }
+  function serializePlan(b) {
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(b.clone);
+  }
+  function rasterizePlan(b, cb) {
+    var src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(serializePlan(b));
+    var img = new Image();
+    img.onload = function () {
+      try {
+        var k = Math.max(1, Math.min(4, 2200 / Math.max(b.cssW, b.cssH)));
+        var cw = Math.round(b.cssW * k), ch = Math.round(b.cssH * k);
+        var cv = document.createElement('canvas');
+        cv.width = cw; cv.height = ch;
+        var ctx = cv.getContext('2d');
+        var bg = (getComputedStyle(document.documentElement).getPropertyValue('--bg') || '#fff').trim();
+        ctx.fillStyle = bg || '#fff';
+        ctx.fillRect(0, 0, cw, ch);
+        ctx.drawImage(img, 0, 0, cw, ch);
+        cb(cv, cw, ch);
+      } catch (err) { cb(null, 0, 0); }
+    };
+    img.onerror = function () { cb(null, 0, 0); };
+    img.src = src;
+  }
+  function downloadBlob(blob, name) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.parentNode.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+  }
   function exportPdf() {
     var btn = $('exportPdf');
     btn.disabled = true;
@@ -1133,40 +1418,51 @@
       toast(err ? 'Could not export the PDF.' : 'PDF downloaded.');
     }
     try {
-      var vb = (svg.getAttribute('viewBox') || '').split(/\s+/).map(Number);
-      if (vb.length !== 4 || !(vb[2] > 0) || !(vb[3] > 0)) { done(true); return; }
-      var cssW = parseFloat(svg.style.width) || svg.clientWidth;
-      var cssH = parseFloat(svg.style.height) || svg.clientHeight;
-      if (!(cssW > 0) || !(cssH > 0)) { done(true); return; }
-      var m = vb[2] / cssW; // room units per screen px, so stroke widths export at screen weight
-      var clone = svg.cloneNode(true);
-      clone.setAttribute('xmlns', SVGNS);
-      clone.setAttribute('width', cssW);
-      clone.setAttribute('height', cssH);
-      var st = document.createElementNS(SVGNS, 'style');
-      st.textContent = planCss(m);
-      clone.insertBefore(st, clone.firstChild);
-      var junk = clone.querySelectorAll('.selbox, .gap, .bandrect');
-      for (var i = 0; i < junk.length; i++) junk[i].parentNode.removeChild(junk[i]);
-      var src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(clone));
-      var img = new Image();
-      img.onload = function () {
+      var b = buildPlanSvg();
+      if (!b) { done(true); return; }
+      rasterizePlan(b, function (cv, cw, ch) {
+        if (!cv) { done(true); return; }
         try {
-          var k = Math.max(1, Math.min(4, 2200 / Math.max(cssW, cssH)));
-          var cw = Math.round(cssW * k), ch = Math.round(cssH * k);
-          var cv = document.createElement('canvas');
-          cv.width = cw; cv.height = ch;
-          var ctx = cv.getContext('2d');
-          var bg = (getComputedStyle(document.documentElement).getPropertyValue('--bg') || '#fff').trim();
-          ctx.fillStyle = bg || '#fff';
-          ctx.fillRect(0, 0, cw, ch);
-          ctx.drawImage(img, 0, 0, cw, ch);
           downloadPdf(cv.toDataURL('image/jpeg', 0.94), cw, ch);
           done(false);
         } catch (err) { done(true); }
-      };
-      img.onerror = function () { done(true); };
-      img.src = src;
+      });
+    } catch (e) { done(true); }
+  }
+  function exportPng() {
+    var btn = $('exportPng');
+    btn.disabled = true;
+    function done(err) {
+      btn.disabled = false;
+      toast(err ? 'Could not export the PNG.' : 'PNG downloaded.');
+    }
+    try {
+      var b = buildPlanSvg();
+      if (!b) { done(true); return; }
+      rasterizePlan(b, function (cv) {
+        if (!cv) { done(true); return; }
+        try {
+          cv.toBlob(function (blob) {
+            if (!blob) { done(true); return; }
+            downloadBlob(blob, 'room-plan.png');
+            done(false);
+          }, 'image/png');
+        } catch (err) { done(true); }
+      });
+    } catch (e) { done(true); }
+  }
+  function exportSvg() {
+    var btn = $('exportSvg');
+    btn.disabled = true;
+    function done(err) {
+      btn.disabled = false;
+      toast(err ? 'Could not export the SVG.' : 'SVG downloaded.');
+    }
+    try {
+      var b = buildPlanSvg();
+      if (!b) { done(true); return; }
+      downloadBlob(new Blob([serializePlan(b)], { type: 'image/svg+xml' }), 'room-plan.svg');
+      done(false);
     } catch (e) { done(true); }
   }
   function downloadPdf(jpegDataUrl, wPx, hPx) {
@@ -1209,10 +1505,15 @@
     setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
   }
   $('exportPdf').addEventListener('click', exportPdf);
+  $('exportPng').addEventListener('click', exportPng);
+  $('exportSvg').addEventListener('click', exportSvg);
 
   /* ---------- start ---------- */
-  if (!load()) useExample();
-  lastSnap = snapshot();
-  renderAll(true);
-  updateUndo();
+  try {
+    if (!load()) useExample();
+    if (loadFromHash()) { persist(); toast('Opened a shared layout'); }
+    lastSnap = snapshot();
+    renderAll(true);
+    updateUndo();
+  } catch (err) { showCrash(err); }
 })();
